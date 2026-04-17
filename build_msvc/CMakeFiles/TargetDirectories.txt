@@ -1,0 +1,3 @@
+D:/VisualStudio_Coding/EncryptedSearch/build_msvc/CMakeFiles/EncryptedSearch.dir
+D:/VisualStudio_Coding/EncryptedSearch/build_msvc/CMakeFiles/ALL_BUILD.dir
+D:/VisualStudio_Coding/EncryptedSearch/build_msvc/CMakeFiles/ZERO_CHECK.dir

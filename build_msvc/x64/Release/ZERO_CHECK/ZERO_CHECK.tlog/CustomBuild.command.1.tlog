@@ -1,0 +1,10 @@
+^D:\VISUALSTUDIO_CODING\ENCRYPTEDSEARCH\BUILD_MSVC\CMAKEFILES\A6A3F0CE45B95207F06CDEDFE4DBAAA2\GENERATE.STAMP.RULE
+setlocal
+D:\vs\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe -SD:/VisualStudio_Coding/EncryptedSearch -BD:/VisualStudio_Coding/EncryptedSearch/build_msvc --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/VisualStudio_Coding/EncryptedSearch/build_msvc/EncryptedSearch.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

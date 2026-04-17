@@ -1,3 +1,10 @@
+// 线程相关标准头必须在 cppjieba 之前 include，
+// 防止 MinGW 8.1.0 下 cppjieba 传递依赖破坏 _GLIBCXX_HAS_GTHREADS 宏
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
+
 #include <index/ParallelHasher.hpp>
 #include <cppjieba/Jieba.hpp>
 #include <iostream>

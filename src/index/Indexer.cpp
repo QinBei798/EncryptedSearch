@@ -75,7 +75,10 @@ void IndexManager::SaveToIndex(const std::string& indexPath) {
         std::copy(hash.begin(), hash.end(), entry.hash);
         entry.offset = currentPostingOffset;
         dictionary.push_back(entry);
-        
+
+        // Phase 6: 对 Posting List 按 docId 升序排序，保证布尔集合运算（双指针法）正确性
+        std::sort(postings.begin(), postings.end(),
+            [](const Posting& a, const Posting& b) { return a.docId < b.docId; });
         postingLists.push_back(postings);
 
         // 更新偏移：4字节(长度) + Posting列表字节数

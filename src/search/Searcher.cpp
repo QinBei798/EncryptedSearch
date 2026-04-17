@@ -101,8 +101,12 @@ std::vector<std::pair<std::string, float>> Searcher::Search(const std::string& k
         return results;
     }
 
-    // 1. 哈希关键词
-    std::array<uint8_t, 32> keywordHash = CryptoEngine::ComputeSM3(keyword);
+    // 1. 搜索关键词统一转小写
+    std::string lowerKeyword = keyword;
+    for (char& c : lowerKeyword) {
+        if (c >= 'A' && c <= 'Z') c += 32;
+    }
+    std::array<uint8_t, 32> keywordHash = CryptoEngine::ComputeSM3(lowerKeyword);
 
     // 2. 在内存中的词典区进行二分查找
     auto it = binarySearchDictionary(keywordHash);
@@ -157,5 +161,192 @@ std::vector<std::pair<std::string, float>> Searcher::Search(const std::string& k
         return a.second > b.second; // 降序
     });
 
+    return results;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Phase 6 — 布尔搜索实现
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 根据单个关键词查倒排索引，返回按 docId 升序排列的 (docId, tfidf_score) 列表
+Searcher::ScoredPostings Searcher::GetPostingList(const std::string& keyword) {
+    ScoredPostings result;
+
+    if (!m_indexFileStream.is_open()) return result;
+
+    // 前处理：搜索关键词统一转小写（与并行哈希时保持一致）
+    std::string lowerKeyword = keyword;
+    for (char& c : lowerKeyword) {
+        if (c >= 'A' && c <= 'Z') c += 32;
+    }
+
+    // 1. 哈希关键词
+    std::array<uint8_t, 32> keywordHash = CryptoEngine::ComputeSM3(lowerKeyword);
+
+    // 2. 词典二分查找
+    auto it = binarySearchDictionary(keywordHash);
+    if (it == m_dictionary.end()) return result;
+
+    // 3. 定位并读取 Posting List
+    m_indexFileStream.clear();
+    m_indexFileStream.seekg(static_cast<std::streamoff>(it->offset), std::ios::beg);
+    if (m_indexFileStream.fail()) return result;
+
+    uint32_t docIdCount = 0;
+    m_indexFileStream.read(reinterpret_cast<char*>(&docIdCount), sizeof(uint32_t));
+    if (m_indexFileStream.gcount() != sizeof(uint32_t)) return result;
+
+    std::vector<Posting> postings(docIdCount);
+    m_indexFileStream.read(reinterpret_cast<char*>(postings.data()),
+                           docIdCount * sizeof(Posting));
+    if (m_indexFileStream.gcount() != static_cast<std::streamsize>(docIdCount * sizeof(Posting)))
+        return result;
+
+    // 4. 计算 IDF 并生成 TF-IDF ScoredPostings（Indexer 已保证 Posting 按 docId 升序）
+    float idf = std::log(static_cast<float>(m_indexHeader.docCount) /
+                         static_cast<float>(docIdCount + 1)) + 1.0f;
+
+    result.reserve(docIdCount);
+    for (const auto& p : postings) {
+        result.push_back({p.docId, p.tf * idf});
+    }
+
+    return result;
+}
+
+// AND: 双指针交集，score = scoreA + scoreB
+Searcher::ScoredPostings Searcher::IntersectPostings(
+    const ScoredPostings& a, const ScoredPostings& b)
+{
+    ScoredPostings result;
+    size_t i = 0, j = 0;
+    while (i < a.size() && j < b.size()) {
+        if (a[i].first == b[j].first) {
+            result.push_back({a[i].first, a[i].second + b[j].second});
+            ++i; ++j;
+        } else if (a[i].first < b[j].first) {
+            ++i;
+        } else {
+            ++j;
+        }
+    }
+    return result;
+}
+
+// OR: 归并并集，score = max(scoreA, scoreB)
+Searcher::ScoredPostings Searcher::UnionPostings(
+    const ScoredPostings& a, const ScoredPostings& b)
+{
+    ScoredPostings result;
+    size_t i = 0, j = 0;
+    while (i < a.size() && j < b.size()) {
+        if (a[i].first == b[j].first) {
+            result.push_back({a[i].first, std::max(a[i].second, b[j].second)});
+            ++i; ++j;
+        } else if (a[i].first < b[j].first) {
+            result.push_back(a[i++]);
+        } else {
+            result.push_back(b[j++]);
+        }
+    }
+    while (i < a.size()) result.push_back(a[i++]);
+    while (j < b.size()) result.push_back(b[j++]);
+    return result;
+}
+
+// NOT: 双指针差集 A-B，保留 A 的分数
+Searcher::ScoredPostings Searcher::DifferencePostings(
+    const ScoredPostings& a, const ScoredPostings& b)
+{
+    ScoredPostings result;
+    size_t i = 0, j = 0;
+    while (i < a.size()) {
+        // 将 j 推进到 b[j].first >= a[i].first
+        while (j < b.size() && b[j].first < a[i].first) ++j;
+
+        if (j >= b.size() || b[j].first != a[i].first) {
+            result.push_back(a[i]); // a[i] 不在 b 中，保留
+        }
+        ++i;
+    }
+    return result;
+}
+
+// 递归求值查询树
+Searcher::ScoredPostings Searcher::EvaluateQuery(
+    const std::shared_ptr<QueryNode>& node)
+{
+    if (!node) return {};
+
+    switch (node->op) {
+        case QueryOp::TERM:
+            return GetPostingList(node->term);
+
+        case QueryOp::AND: {
+            // 1. 处理 "A AND NOT B" (左正右非)
+            if (node->right && node->right->op == QueryOp::NOT && (!node->left || node->left->op != QueryOp::NOT)) {
+                auto leftList = EvaluateQuery(node->left);
+                auto notList = EvaluateQuery(node->right->right);
+                return DifferencePostings(leftList, notList);
+            }
+            // 2. 处理 "NOT A AND B" (左非右正)
+            if (node->left && node->left->op == QueryOp::NOT && (!node->right || node->right->op != QueryOp::NOT)) {
+                auto rightList = EvaluateQuery(node->right);
+                auto notList = EvaluateQuery(node->left->right);
+                return DifferencePostings(rightList, notList);
+            }
+            // 3. 正常 "A AND B"
+            auto leftList = EvaluateQuery(node->left);
+            auto rightList = EvaluateQuery(node->right);
+            return IntersectPostings(leftList, rightList);
+        }
+
+        case QueryOp::OR: {
+            auto leftList  = EvaluateQuery(node->left);
+            auto rightList = EvaluateQuery(node->right);
+            return UnionPostings(leftList, rightList);
+        }
+
+        case QueryOp::NOT:
+            // NOT 不应作为根节点单独出现
+            // 仅在 AND 分支中作为右子节点被特殊处理
+            std::cerr << "[Searcher] NOT node cannot appear as root of query tree." << std::endl;
+            return {};
+    }
+    return {};
+}
+
+// BooleanSearch 主入口
+std::vector<std::pair<std::string, float>> Searcher::BooleanSearch(
+    const std::string& query)
+{
+    // 1. 解析查询字符串为查询树
+    auto queryTree = QueryParser::Parse(query);
+    if (!queryTree) {
+        std::cerr << "[Searcher] Failed to parse boolean query: " << query << std::endl;
+        return {};
+    }
+
+    // 2. 递归求值，得到 (docId, score) 列表
+    auto scoredPostings = EvaluateQuery(queryTree);
+
+    // 3. 按 TF-IDF 聚合分数降序排列
+    std::sort(scoredPostings.begin(), scoredPostings.end(),
+        [](const std::pair<uint32_t, float>& a, const std::pair<uint32_t, float>& b) {
+            return a.second > b.second;
+        });
+
+    // 4. 将 docId 映射为文件路径
+    std::vector<std::pair<std::string, float>> results;
+    results.reserve(scoredPostings.size());
+    for (const auto& [docId, score] : scoredPostings) {
+        auto it = m_fileMap.find(docId);
+        if (it != m_fileMap.end()) {
+            results.push_back({it->second, score});
+        } else {
+            std::cerr << "[Searcher] Warning: DocId " << docId
+                      << " not found in file map." << std::endl;
+        }
+    }
     return results;
 }

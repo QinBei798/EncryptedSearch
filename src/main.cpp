@@ -122,5 +122,36 @@ int main() {
   std::cout << "\nIndex creation and basic keyword hashing test complete."
             << std::endl;
 
+  // 9. Phase 6: 布尔搜索测试
+  std::cout << "\n--- Phase 6: Boolean Search Tests ---" << std::endl;
+
+  struct BoolCase {
+      std::string query;
+      std::string desc;
+  };
+  std::vector<BoolCase> booleanQueries = {
+      {"SM3 AND SM4",             "AND: both SM3 and SM4"},
+      {"分词 OR 加密",             "OR:  分词 or 加密"},
+      {"加密 AND NOT 分词",        "AND NOT: 加密 but not 分词"},
+      {"C++ OR 国密",              "OR:  C++ or 国密"},
+      {"Encryption AND NOT SM3",  "AND NOT (English)"},
+      {"国密",                    "single term (fallback)"},
+  };
+
+  for (const auto& bc : booleanQueries) {
+      std::cout << "\n[" << bc.desc << "]\n"
+                << "  Query: \"" << bc.query << "\"" << std::endl;
+      auto results = searcher.BooleanSearch(bc.query);
+      if (results.empty()) {
+          std::cout << "  -> No matching files found." << std::endl;
+      } else {
+          for (const auto& [path, score] : results) {
+              std::cout << "  -> " << path
+                        << " (Score: " << score << ")" << std::endl;
+          }
+      }
+  }
+
+  std::cout << "\nAll tests complete." << std::endl;
   return 0;
-}
+}

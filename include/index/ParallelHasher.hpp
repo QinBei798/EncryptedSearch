@@ -3,19 +3,13 @@
 #include <string>
 #include <thread>
 #include <mutex>
+#include <atomic>
 #include <queue>
 #include <condition_variable>
 #include <functional>
 #include <map>
+#include <index/IndexStructs.hpp>    // Posting 结构体（POD，无线程依赖）
 #include "../core/CryptoEngine.hpp"
-
-#pragma pack(push, 1)
-struct Posting {
-    uint32_t docId;
-    float tf;
-};
-#pragma pack(pop)
-
 
 class ParallelHasher {
 public:

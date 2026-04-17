@@ -51,6 +51,41 @@
 
 ---
 
+### 🗄️ 二进制索引布局 (ESIX Format)
+
+```text
+[ IndexHeader (48 Bytes) ]
+  ├─ Magic Number (0x58495345 "ESIX")
+  ├─ Version, KeywordCount, DocCount
+  └─ PBKDF2 Salt (16B) & Iterations (4B)
+
+[ Dictionary (词典区) ]  <-- 启动时全量加载至内存
+  ├─ Entry 1: Hash (32B) | Offset (8B) 
+  ├─ Entry 2: Hash (32B) | Offset (8B)
+  └─ ... (定长 40B，按 Hash 字典序排列，支持 O(log N) 二分查找)
+
+[ Posting Lists (倒排列表区) ] <-- 驻留磁盘，通过 offset 按需读取
+  ├─ List 1: DocCount (4B) | [DocId (4B), TF (4B)] * N
+  ├─ List 2: DocCount (4B) | [DocId (4B), TF (4B)] * N
+  └─ ...
+```
+
+### 🧵 并发线程调度图 (Thread Pool)
+
+```text
+[ 主线程 ScanDirectory ] ──(AddTask)──▶ [ 任务队列 Task Queue ]
+                                              │ (std::mutex)
+    ┌─────────────────────────────────────────┴─────────────────────────────────────────┐
+    │ Worker 1: 取出文件 ──▶ cppjieba 分词 ──▶ 批量 SM3 哈希 ──▶ 局部聚合 (Local Map) │
+    │ Worker 2: 取出文件 ──▶ cppjieba 分词 ──▶ 批量 SM3 哈希 ──▶ 局部聚合 (Local Map) │
+    └─────────────────────────────────────────┬─────────────────────────────────────────┘
+                                              │ (合并)
+                                              ▼
+                                  [ 全局内存倒排索引 ] ──(SaveToIndex)──▶ 落盘
+```
+
+---
+
 ## 🚀 编译与运行
 
 ### 前置依赖

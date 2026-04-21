@@ -1,5 +1,6 @@
 # 1. 编译构建目录
 build/
+build_msvc/
 out/
 bin/
 

@@ -5,11 +5,13 @@
  * @date 2026-04-22
  */
 
-#include <search/QueryParser.hpp>
+#include "search/QueryParser.hpp"
 #include <sstream>
 #include <iostream>
 #include <algorithm>
 #include <cctype>
+#include <vector>
+#include <memory>
 
 std::vector<QueryParser::Token> QueryParser::Tokenize(const std::string& query) {
     std::vector<Token> tokens;

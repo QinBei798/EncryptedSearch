@@ -9,19 +9,30 @@
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
+#include <map>
+#include <vector>
 
-#include <index/ParallelHasher.hpp>
+#include "index/ParallelHasher.hpp"
 #include <cppjieba/Jieba.hpp>
 #include <iostream>
 #include <fstream>
 #include <algorithm>
+#include <filesystem>
 
-// Jieba 分词器所需的字典文件路径（相对于运行目录）
-static const char* DICT_PATH      = "third_party/cppjieba/dict/jieba.dict.utf8";
-static const char* HMM_PATH       = "third_party/cppjieba/dict/hmm_model.utf8";
-static const char* USER_DICT_PATH = "third_party/cppjieba/dict/user.dict.utf8";
-static const char* IDF_PATH       = "third_party/cppjieba/dict/idf.utf8";
-static const char* STOP_WORD_PATH = "third_party/cppjieba/dict/stop_words.utf8";
+// Jieba 分词器所需的字典文件路径（自动适配运行目录）
+static std::string getDictDir() {
+    if (std::filesystem::exists("third_party/cppjieba/dict/jieba.dict.utf8")) {
+        return "third_party/cppjieba/dict/";
+    }
+    if (std::filesystem::exists("../../third_party/cppjieba/dict/jieba.dict.utf8")) {
+        return "../../third_party/cppjieba/dict/";
+    }
+    return "D:/VisualStudio_Coding/EncryptedSearch/third_party/cppjieba/dict/";
+}
+
+static std::string getDictPath(const std::string& filename) {
+    return getDictDir() + filename;
+}
 
 /**
  * 设计决策：全局共享 Jieba 实例
@@ -113,7 +124,11 @@ void ParallelHasher::worker() {
                 if (!s_jieba) {
                     try {
                         s_jieba = std::make_unique<cppjieba::Jieba>(
-                            DICT_PATH, HMM_PATH, USER_DICT_PATH, IDF_PATH, STOP_WORD_PATH);
+                            getDictPath("jieba.dict.utf8"), 
+                            getDictPath("hmm_model.utf8"), 
+                            getDictPath("user.dict.utf8"), 
+                            getDictPath("idf.utf8"), 
+                            getDictPath("stop_words.utf8"));
                     } catch (const std::exception& e) {
                         std::cerr << "[Worker] Jieba 初始化失败: " << e.what() << std::endl;
                     }

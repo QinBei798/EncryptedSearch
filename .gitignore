@@ -16,6 +16,7 @@ bin/
 # 3. 本项目运行生成的临时/测试数据（不应被加入版本库）
 test_docs/
 cipher_docs/
+cipher_docs_5gb/
 *.bin
 *.dat
 

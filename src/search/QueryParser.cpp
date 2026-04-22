@@ -1,12 +1,16 @@
+/**
+ * @file QueryParser.cpp
+ * @brief QueryParser 类的实现，基于递归下降算法的布尔查询解析
+ * @author Antigravity
+ * @date 2026-04-22
+ */
+
 #include <search/QueryParser.hpp>
 #include <sstream>
 #include <iostream>
 #include <algorithm>
 #include <cctype>
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  词法分析：将查询字符串切分为 Token 序列
-// ─────────────────────────────────────────────────────────────────────────────
 std::vector<QueryParser::Token> QueryParser::Tokenize(const std::string& query) {
     std::vector<Token> tokens;
     std::istringstream iss(query);
@@ -27,54 +31,37 @@ std::vector<QueryParser::Token> QueryParser::Tokenize(const std::string& query) 
         tokens.push_back(tok);
     }
 
-    // 尾部哨兵 Token，避免解析时越界检查
+    // 哨兵 Token，标识序列结束
     tokens.push_back({TokenType::END, ""});
     return tokens;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ParsePrimary → WORD
-// ─────────────────────────────────────────────────────────────────────────────
-std::shared_ptr<QueryNode> QueryParser::ParsePrimary(
-    const std::vector<Token>& tokens, size_t& pos)
-{
+std::shared_ptr<QueryNode> QueryParser::ParsePrimary(const std::vector<Token>& tokens, size_t& pos) {
     if (pos < tokens.size() && tokens[pos].type == TokenType::WORD) {
         auto node = QueryNode::MakeTerm(tokens[pos].value);
         ++pos;
         return node;
     }
-    // 非 WORD token（如意外的 AND/OR/END），解析失败
-    std::cerr << "[QueryParser] Expected WORD token at position " << pos << std::endl;
+    std::cerr << "[QueryParser] 语法错误：此处应为关键词，位置: " << pos << std::endl;
     return nullptr;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ParseUnary → NOT ParseUnary | ParsePrimary
-// ─────────────────────────────────────────────────────────────────────────────
-std::shared_ptr<QueryNode> QueryParser::ParseUnary(
-    const std::vector<Token>& tokens, size_t& pos)
-{
+std::shared_ptr<QueryNode> QueryParser::ParseUnary(const std::vector<Token>& tokens, size_t& pos) {
     if (pos < tokens.size() && tokens[pos].type == TokenType::NOT) {
-        ++pos; // 消费 NOT
-        auto operand = ParseUnary(tokens, pos); // 递归，支持 NOT NOT（双重否定）
+        ++pos;
+        auto operand = ParseUnary(tokens, pos); // 支持递归处理多重否定
         if (!operand) return nullptr;
         return QueryNode::MakeNot(operand);
     }
     return ParsePrimary(tokens, pos);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ParseAnd → ParseUnary ( AND ParseUnary )*
-//  优先级高于 OR，低于 NOT
-// ─────────────────────────────────────────────────────────────────────────────
-std::shared_ptr<QueryNode> QueryParser::ParseAnd(
-    const std::vector<Token>& tokens, size_t& pos)
-{
+std::shared_ptr<QueryNode> QueryParser::ParseAnd(const std::vector<Token>& tokens, size_t& pos) {
     auto left = ParseUnary(tokens, pos);
     if (!left) return nullptr;
 
     while (pos < tokens.size() && tokens[pos].type == TokenType::AND) {
-        ++pos; // 消费 AND
+        ++pos;
         auto right = ParseUnary(tokens, pos);
         if (!right) return nullptr;
         left = QueryNode::MakeBinary(QueryOp::AND, left, right);
@@ -82,18 +69,12 @@ std::shared_ptr<QueryNode> QueryParser::ParseAnd(
     return left;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ParseExpr → ParseAnd ( OR ParseAnd )*
-//  优先级最低
-// ─────────────────────────────────────────────────────────────────────────────
-std::shared_ptr<QueryNode> QueryParser::ParseExpr(
-    const std::vector<Token>& tokens, size_t& pos)
-{
+std::shared_ptr<QueryNode> QueryParser::ParseExpr(const std::vector<Token>& tokens, size_t& pos) {
     auto left = ParseAnd(tokens, pos);
     if (!left) return nullptr;
 
     while (pos < tokens.size() && tokens[pos].type == TokenType::OR) {
-        ++pos; // 消费 OR
+        ++pos;
         auto right = ParseAnd(tokens, pos);
         if (!right) return nullptr;
         left = QueryNode::MakeBinary(QueryOp::OR, left, right);
@@ -101,12 +82,9 @@ std::shared_ptr<QueryNode> QueryParser::ParseExpr(
     return left;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  主入口
-// ─────────────────────────────────────────────────────────────────────────────
 std::shared_ptr<QueryNode> QueryParser::Parse(const std::string& query) {
     if (query.empty()) {
-        std::cerr << "[QueryParser] Empty query string." << std::endl;
+        std::cerr << "[QueryParser] 错误：查询字符串为空。" << std::endl;
         return nullptr;
     }
 
@@ -114,10 +92,9 @@ std::shared_ptr<QueryNode> QueryParser::Parse(const std::string& query) {
     size_t pos = 0;
     auto root = ParseExpr(tokens, pos);
 
-    // 成功解析后，pos 应指向 END token
+    // 验证是否完整解析了所有 Token
     if (root && pos < tokens.size() && tokens[pos].type != TokenType::END) {
-        std::cerr << "[QueryParser] Unexpected token after expression at position "
-                  << pos << std::endl;
+        std::cerr << "[QueryParser] 语法错误：表达式后存在多余字符，位置: " << pos << std::endl;
         return nullptr;
     }
 

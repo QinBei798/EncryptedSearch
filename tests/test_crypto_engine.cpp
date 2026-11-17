@@ -4,6 +4,7 @@
  */
 
 #include "core/CryptoEngine.hpp"
+#include "core/SystemMonitor.hpp"
 
 #include <array>
 #include <cstdint>
@@ -12,6 +13,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -124,12 +126,122 @@ void TestSm4EncryptDecryptStillWorksWithSeparatedKey() {
     fs::remove_all(tmpDir, ec);
 }
 
+void TestSm4StreamingBoundarySizes() {
+    const fs::path tmpDir = fs::temp_directory_path() / "es_test_crypto_stream_bounds";
+    std::error_code ec;
+    fs::remove_all(tmpDir, ec);
+    fs::create_directories(tmpDir, ec);
+
+    std::array<uint8_t, 16> salt{};
+    salt.fill(0x6B);
+    CryptoEngine::DeriveKeySM3PBKDF2("stream_boundary_pass", salt, 1000);
+
+    // 覆盖 0B、块边界(15/16/17B) 与 64KB 流式分块边界(65535/65536/65537B) 及跨4块尾部
+    const std::vector<size_t> testSizes = {
+        0, 1, 15, 16, 17, 65535, 65536, 65537, 65536 * 3 + 19
+    };
+
+    for (size_t sz : testSizes) {
+        const fs::path plainPath = tmpDir / ("plain_" + std::to_string(sz) + ".bin");
+        const fs::path cipherPath = tmpDir / ("cipher_" + std::to_string(sz) + ".cipher");
+        const fs::path decPath = tmpDir / ("dec_" + std::to_string(sz) + ".bin");
+
+        std::vector<uint8_t> original(sz);
+        for (size_t i = 0; i < sz; ++i) {
+            original[i] = static_cast<uint8_t>((i * 131 + 17) & 0xFF);
+        }
+        {
+            std::ofstream out(plainPath, std::ios::binary);
+            if (!original.empty()) {
+                out.write(reinterpret_cast<const char*>(original.data()),
+                          static_cast<std::streamsize>(original.size()));
+            }
+        }
+
+        EXPECT_TRUE(CryptoEngine::EncryptFileSM4(plainPath.string(), cipherPath.string()),
+                    "EncryptFileSM4 succeeds for size=" + std::to_string(sz));
+
+        // 兼容格式校验：[ 16B IV | PKCS7 填充后 16B 倍数密文 ]
+        const size_t expectedCipherSize = 16 + ((sz / 16) + 1) * 16;
+        EXPECT_TRUE(fs::file_size(cipherPath) == expectedCipherSize,
+                    "Cipher size matches [16B IV + PKCS7 ciphertext] for size=" + std::to_string(sz));
+
+        EXPECT_TRUE(CryptoEngine::DecryptFileSM4(cipherPath.string(), decPath.string()),
+                    "DecryptFileSM4 succeeds for size=" + std::to_string(sz));
+
+        std::ifstream in(decPath, std::ios::binary);
+        std::vector<uint8_t> restored((std::istreambuf_iterator<char>(in)),
+                                      std::istreambuf_iterator<char>());
+        EXPECT_TRUE(restored == original, "Roundtrip bytes match for size=" + std::to_string(sz));
+    }
+
+    // 校验非16字节对齐的损坏密文被安全拒绝
+    const fs::path badLenCipher = tmpDir / "bad_len.cipher";
+    {
+        std::ofstream out(badLenCipher, std::ios::binary);
+        std::vector<uint8_t> bad(16 + 17, 0xAB); // IV + 非16倍数密文
+        out.write(reinterpret_cast<const char*>(bad.data()), static_cast<std::streamsize>(bad.size()));
+    }
+    const fs::path badOut = tmpDir / "bad_out.bin";
+    EXPECT_TRUE(!CryptoEngine::DecryptFileSM4(badLenCipher.string(), badOut.string()),
+                "DecryptFileSM4 rejects unaligned ciphertext length");
+
+    fs::remove_all(tmpDir, ec);
+}
+
+void TestSm4StreamingMemoryBound() {
+    const fs::path tmpDir = fs::temp_directory_path() / "es_test_crypto_stream_mem";
+    std::error_code ec;
+    fs::remove_all(tmpDir, ec);
+    fs::create_directories(tmpDir, ec);
+
+    const fs::path plainPath = tmpDir / "big_16mb.bin";
+    const fs::path cipherPath = tmpDir / "big_16mb.cipher";
+    const fs::path decPath = tmpDir / "big_16mb.dec";
+
+    // 写入 16MB 数据（避免用内存大 vector 常驻，流式写盘）
+    {
+        std::vector<uint8_t> block(64 * 1024, 0x5C);
+        std::ofstream out(plainPath, std::ios::binary);
+        for (int i = 0; i < 256; ++i) {
+            out.write(reinterpret_cast<const char*>(block.data()), static_cast<std::streamsize>(block.size()));
+        }
+    }
+
+    std::array<uint8_t, 16> salt{};
+    salt.fill(0x7D);
+    CryptoEngine::DeriveKeySM3PBKDF2("stream_mem_pass", salt, 1000);
+
+    const MemoryStats memBefore = SystemMonitor::GetMemoryStats();
+    EXPECT_TRUE(CryptoEngine::EncryptFileSM4(plainPath.string(), cipherPath.string()),
+                "16MB streaming encrypt succeeds");
+    EXPECT_TRUE(CryptoEngine::DecryptFileSM4(cipherPath.string(), decPath.string()),
+                "16MB streaming decrypt succeeds");
+    const MemoryStats memAfter = SystemMonitor::GetMemoryStats();
+
+    EXPECT_TRUE(CryptoEngine::ComputeFileSM3(decPath.string()) ==
+                CryptoEngine::ComputeFileSM3(plainPath.string()),
+                "16MB streaming decrypt SM3 matches original");
+
+    if (memBefore.IsValid() && memAfter.IsValid()) {
+        const double peakDeltaMB = memAfter.peakRssMB - memBefore.peakRssMB;
+        // 旧全量读入方案会分配 2x16MB=32MB+ 内存；64KB 流式方案增量应远小于 8MB
+        EXPECT_TRUE(peakDeltaMB < 8.0,
+                    "16MB SM4 encrypt/decrypt must keep peak RSS delta < 8MB (actual=" +
+                    std::to_string(peakDeltaMB) + " MB)");
+    }
+
+    fs::remove_all(tmpDir, ec);
+}
+
 } // namespace
 
 int main() {
     TestTrapdoorRequiresKey();
     TestHmacSm3AndDomainSeparation();
     TestSm4EncryptDecryptStillWorksWithSeparatedKey();
+    TestSm4StreamingBoundarySizes();
+    TestSm4StreamingMemoryBound();
 
     if (g_failures > 0) {
         std::cerr << g_failures << " assertion(s) failed." << std::endl;

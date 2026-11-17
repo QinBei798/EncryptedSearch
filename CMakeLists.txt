@@ -120,6 +120,7 @@ add_test(NAME ParallelHasherTests COMMAND test_parallel_hasher)
 add_executable(test_crypto_engine
     tests/test_crypto_engine.cpp
     src/core/CryptoEngine.cpp
+    src/core/SystemMonitor.cpp
     src/core/hex.c
     src/core/sm3.c
     src/core/sm3_digest.c
@@ -131,6 +132,9 @@ add_executable(test_crypto_engine
 target_include_directories(test_crypto_engine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+if(WIN32)
+    target_link_libraries(test_crypto_engine PRIVATE psapi)
+endif()
 add_test(NAME CryptoEngineTests COMMAND test_crypto_engine)
 
 add_executable(test_searcher_blind_index
@@ -184,6 +188,62 @@ if(CMAKE_COMPILER_IS_GNUCXX)
     target_link_libraries(test_completeness_e2e PRIVATE stdc++fs)
 endif()
 add_test(NAME CompletenessE2ETests COMMAND test_completeness_e2e)
+
+add_executable(test_search_correctness
+    tests/test_search_correctness.cpp
+    src/index/Indexer.cpp
+    src/index/ParallelHasher.cpp
+    src/search/Searcher.cpp
+    src/search/QueryParser.cpp
+    src/core/CryptoEngine.cpp
+    src/core/hex.c
+    src/core/sm3.c
+    src/core/sm3_digest.c
+    src/core/sm3_hmac.c
+    src/core/sm3_pbkdf2.c
+    src/core/sm4.c
+    src/core/sm4_cbc.c
+)
+target_include_directories(test_search_correctness PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cppjieba/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cppjieba/deps/limonp/include
+)
+target_link_libraries(test_search_correctness PRIVATE Threads::Threads)
+if(CMAKE_COMPILER_IS_GNUCXX)
+    target_link_libraries(test_search_correctness PRIVATE stdc++fs)
+endif()
+add_test(NAME SearchCorrectnessTests COMMAND test_search_correctness)
+
+add_executable(test_stability_stress
+    tests/test_stability_stress.cpp
+    src/index/Indexer.cpp
+    src/index/ParallelHasher.cpp
+    src/search/Searcher.cpp
+    src/search/QueryParser.cpp
+    src/core/CryptoEngine.cpp
+    src/core/SystemMonitor.cpp
+    src/core/hex.c
+    src/core/sm3.c
+    src/core/sm3_digest.c
+    src/core/sm3_hmac.c
+    src/core/sm3_pbkdf2.c
+    src/core/sm4.c
+    src/core/sm4_cbc.c
+)
+target_include_directories(test_stability_stress PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cppjieba/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cppjieba/deps/limonp/include
+)
+target_link_libraries(test_stability_stress PRIVATE Threads::Threads)
+if(CMAKE_COMPILER_IS_GNUCXX)
+    target_link_libraries(test_stability_stress PRIVATE stdc++fs)
+endif()
+if(WIN32)
+    target_link_libraries(test_stability_stress PRIVATE psapi)
+endif()
+add_test(NAME StabilityStressTests COMMAND test_stability_stress)
 
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)

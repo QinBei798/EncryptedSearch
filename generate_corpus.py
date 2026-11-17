@@ -98,7 +98,7 @@ def write_tracked_file(
 
 
 def build_cross_64kb_payload(paragraphs: List[bytes], rng: random.Random) -> bytes:
-    """Construct a >70KB payload with English & Chinese words straddling byte 65536."""
+    """Construct a >70KB payload with an English canary straddling byte 65536."""
     buf = bytearray(b"canaryheadtoken ")
     pad_unit = b"pad "
     while len(buf) + len(pad_unit) <= 65530:
@@ -108,7 +108,24 @@ def build_cross_64kb_payload(paragraphs: List[bytes], rng: random.Random) -> byt
 
     # 'crossboundaryen' spans [65530, 65545), crossing 65536
     buf.extend(b"crossboundaryen ")
-    buf.extend("搜索引擎测试内容。\n".encode("utf-8"))
+    buf.extend("边界跨块英文检索测试内容。\n".encode("utf-8"))
+    while len(buf) < 72 * 1024:
+        buf.extend(rng.choice(paragraphs))
+    buf.extend(b"\ncanarytailtoken\n")
+    return bytes(buf)
+
+
+def build_cross_64kb_zh_payload(paragraphs: List[bytes], rng: random.Random) -> bytes:
+    """Construct a >70KB payload with a Chinese dictionary word straddling byte 65536."""
+    buf = bytearray(b"canaryheadtoken ")
+    pad_unit = "填充 ".encode("utf-8")
+    while len(buf) + len(pad_unit) <= 65525:
+        buf.extend(pad_unit)
+    while len(buf) < 65525:
+        buf.extend(b" ")
+
+    # '中华人民共和国' (21 bytes) spans [65525, 65546), crossing 65536
+    buf.extend("中华人民共和国 边界跨块中文检索测试。\n".encode("utf-8"))
     while len(buf) < 72 * 1024:
         buf.extend(rng.choice(paragraphs))
     buf.extend(b"\ncanarytailtoken\n")
@@ -154,7 +171,7 @@ def generate_corpus(
         "topicbeta": set(),
         "topicgamma": set(),
         "crossboundaryen": set(),
-        "搜索引擎": set(),
+        "中华人民共和国": set(),
         "canaryheadtoken": set(),
         "canarytailtoken": set(),
     }
@@ -162,7 +179,7 @@ def generate_corpus(
     written_bytes = 0
     target_bytes = int(total_mb * 1024 * 1024)
 
-    # 1. Optional edge-case files (0B, whitespace, 64KB boundary, nested CJK+space path)
+    # 1. Optional edge-case files (0B, whitespace, 64KB EN/ZH boundary, nested CJK+space path)
     if include_edge_cases:
         written_bytes += write_tracked_file(out_dir, "edge_empty.txt", [b""], [], records, tag_index)
         written_bytes += write_tracked_file(out_dir, "edge_whitespace.txt", [b"   \t\n  \r\n"], [], records, tag_index)
@@ -171,7 +188,16 @@ def generate_corpus(
             out_dir,
             "edge_cross_64kb.txt",
             [cross_payload],
-            ["crossboundaryen", "搜索引擎", "canaryheadtoken", "canarytailtoken"],
+            ["crossboundaryen", "canaryheadtoken", "canarytailtoken"],
+            records,
+            tag_index,
+        )
+        cross_zh_payload = build_cross_64kb_zh_payload(paragraphs, rng)
+        written_bytes += write_tracked_file(
+            out_dir,
+            "edge_cross_64kb_zh.txt",
+            [cross_zh_payload],
+            ["中华人民共和国", "canaryheadtoken", "canarytailtoken"],
             records,
             tag_index,
         )
@@ -262,7 +288,7 @@ def generate_corpus(
         "topicalpha OR topicgamma": sorted(alpha | gamma),
         "topicalpha AND NOT topicbeta": sorted(alpha - beta),
         "crossboundaryen": sorted(tag_index["crossboundaryen"]),
-        "搜索引擎": sorted(tag_index["搜索引擎"]),
+        "中华人民共和国": sorted(tag_index["中华人民共和国"]),
         "canaryheadtoken": sorted(tag_index["canaryheadtoken"]),
         "canarytailtoken": sorted(tag_index["canarytailtoken"]),
     }

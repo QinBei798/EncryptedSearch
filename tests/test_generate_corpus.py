@@ -88,9 +88,14 @@ def main() -> int:
         # 4. 验证关键边界文件存在（0B 空文件、64KB 跨界文件、中文+空格嵌套路径）
         assert "edge_empty.txt" in actual_files and actual_files["edge_empty.txt"][0] == 0
         assert "edge_cross_64kb.txt" in actual_files and actual_files["edge_cross_64kb.txt"][0] > 65536
+        assert "edge_cross_64kb_zh.txt" in actual_files and actual_files["edge_cross_64kb_zh.txt"][0] > 65536
         cross_bytes = open(os.path.join(dir_a, "edge_cross_64kb.txt"), "rb").read()
         idx_en = cross_bytes.find(b"crossboundaryen")
         assert 0 < idx_en < 65536 < idx_en + len(b"crossboundaryen"), "English canary must straddle 65536"
+        cross_zh_bytes = open(os.path.join(dir_a, "edge_cross_64kb_zh.txt"), "rb").read()
+        zh_tok = "中华人民共和国".encode("utf-8")
+        idx_zh = cross_zh_bytes.find(zh_tok)
+        assert 0 < idx_zh < 65536 < idx_zh + len(zh_tok), "Chinese canary must straddle 65536"
         assert any(" " in rel and any(ord(ch) > 127 for ch in rel) for rel in actual_files), \
             "Must include nested path with spaces and CJK characters"
 

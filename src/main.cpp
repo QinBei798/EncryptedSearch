@@ -29,7 +29,7 @@ void PrintUsage(const char* progName) {
               << "  " << progName << " [语料目录路径]          扫描加密语料、构建 v3 盲索引并启动检索\n"
               << "  " << progName << " --search-only [工作目录] 冷启动模式：加载既有索引并输入密码验证后检索/解密\n"
               << "说明: 未指定目录时将依次尝试 ./test_docs_5gb、../../test_docs_5gb、./test_docs、../../test_docs。\n"
-              << "      也可运行 'python3 generate_5gb_data.py' 生成 5GB 实验语料。" << std::endl;
+              << "      也可运行 'python3 generate_corpus.py --total-mb 100 --out-dir test_docs' 生成带真值清单的基准语料。" << std::endl;
 }
 
 std::string ResolveSearchOnlyCipherDir(const fs::path& workDir) {

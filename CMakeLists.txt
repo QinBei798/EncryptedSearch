@@ -261,4 +261,10 @@ if(Python3_FOUND)
             $<TARGET_FILE:${PROJECT_NAME}>
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
+    add_test(
+        NAME CorpusGeneratorTests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_generate_corpus.py
+            ${CMAKE_CURRENT_SOURCE_DIR}
+    )
 endif()

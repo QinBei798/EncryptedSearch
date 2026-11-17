@@ -9,12 +9,14 @@
 #include "search/Searcher.hpp"
 
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <random>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -23,9 +25,125 @@ namespace fs = std::filesystem;
 namespace {
 
 void PrintUsage(const char* progName) {
-    std::cout << "用法: " << progName << " [语料目录路径]\n"
-              << "说明: 若未指定目录，将依次尝试查找 ./test_docs_5gb、../../test_docs_5gb、./test_docs、../../test_docs。\n"
+    std::cout << "用法:\n"
+              << "  " << progName << " [语料目录路径]          扫描加密语料、构建 v3 盲索引并启动检索\n"
+              << "  " << progName << " --search-only [工作目录] 冷启动模式：加载既有索引并输入密码验证后检索/解密\n"
+              << "说明: 未指定目录时将依次尝试 ./test_docs_5gb、../../test_docs_5gb、./test_docs、../../test_docs。\n"
               << "      也可运行 'python3 generate_5gb_data.py' 生成 5GB 实验语料。" << std::endl;
+}
+
+std::string ResolveSearchOnlyCipherDir(const fs::path& workDir) {
+    std::error_code ec;
+    fs::path absWork = fs::absolute(workDir, ec).lexically_normal();
+    if (!absWork.has_filename()) {
+        absWork = absWork.parent_path();
+    }
+    const fs::path localCipher = absWork / "cipher_docs";
+    if (fs::exists(localCipher, ec) && fs::is_directory(localCipher, ec)) {
+        return localCipher.string();
+    }
+    const fs::path siblingCipher = absWork.parent_path() / "cipher_docs";
+    if (fs::exists(siblingCipher, ec) && fs::is_directory(siblingCipher, ec)) {
+        return siblingCipher.string();
+    }
+    return localCipher.string();
+}
+
+void RunInteractiveLoop(Searcher& searcher, const std::string& cipherDir) {
+    std::cout << "\n=============================================" << std::endl;
+    std::cout << "          交互式布尔搜索模式 (Interactive)      " << std::endl;
+    std::cout << "=============================================" << std::endl;
+    std::cout << "提示：输入如 'SM3 AND SM4' 或 'C++ OR 分词' 进行查询" << std::endl;
+    std::cout << "      输入 'decrypt <文档路径> <输出路径>' 可还原密文文件" << std::endl;
+    std::cout << "      输入 'exit' 退出程序" << std::endl;
+
+    std::string userQuery;
+    std::cin.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
+
+    while (true) {
+        std::cout << "\n搜索请求 > ";
+        if (!std::getline(std::cin, userQuery) || userQuery == "exit") {
+            break;
+        }
+        if (userQuery.empty()) {
+            continue;
+        }
+
+        if (userQuery.rfind("decrypt ", 0) == 0) {
+            std::istringstream iss(userQuery.substr(8));
+            std::string docPath;
+            std::string outPath;
+            if (!(iss >> docPath >> outPath)) {
+                std::cout << "  [!] 用法: decrypt <文档路径> <输出路径>" << std::endl;
+                continue;
+            }
+            uint32_t docId = 0;
+            if (!searcher.GetDocId(docPath, docId)) {
+                std::cout << "  [!] 未在映射表中找到文档: " << docPath << std::endl;
+                continue;
+            }
+            const std::string cipherPath = (fs::path(cipherDir) / (std::to_string(docId) + ".cipher")).string();
+            if (CryptoEngine::DecryptFileSM4(cipherPath, outPath)) {
+                std::cout << "  [*] 解密成功: " << cipherPath << " -> " << outPath << std::endl;
+            } else {
+                std::cout << "  [!] 解密失败: " << cipherPath << std::endl;
+            }
+            continue;
+        }
+
+        auto results = searcher.BooleanSearch(userQuery);
+        if (results.empty()) {
+            std::cout << "  [!] 未找到匹配内容: " << userQuery << std::endl;
+        } else {
+            std::cout << "  [*] 检索到 " << results.size() << " 个结果:" << std::endl;
+            for (const auto& [path, score] : results) {
+                std::cout << "    -> " << path << " (得分: " << score << ")" << std::endl;
+            }
+        }
+    }
+}
+
+int RunColdStartSearch(int argc, char* argv[]) {
+    std::error_code ec;
+    fs::path workDir = (argc > 2) ? fs::path(argv[2]) : fs::current_path(ec);
+    const std::string indexPath = (workDir / "encrypted_search_index.bin").string();
+    const std::string mapPath = (workDir / "file_map.dat").string();
+    const std::string cipherDir = ResolveSearchOnlyCipherDir(workDir);
+
+    std::cout << "--- 冷启动加密检索模式 (--search-only) ---" << std::endl;
+    Searcher searcher;
+    if (!searcher.LoadFileMap(mapPath) || !searcher.LoadIndex(indexPath)) {
+        std::cerr << "错误: 加载既有索引或文件映射失败。" << std::endl;
+        return 1;
+    }
+
+    std::string password;
+    std::cout << "请输入主密码以解锁索引和密文: ";
+    if (!(std::cin >> password)) {
+        std::cerr << "\n错误: 未读取到主密码。" << std::endl;
+        return 1;
+    }
+
+    const auto& hdr = searcher.GetIndexHeader();
+    std::array<uint8_t, 16> salt{};
+    std::memcpy(salt.data(), hdr.salt, salt.size());
+
+    try {
+        CryptoEngine::DeriveKeySM3PBKDF2(password, salt, hdr.iterations);
+    } catch (const std::exception& e) {
+        std::cerr << "密钥派生失败: " << e.what() << std::endl;
+        return 1;
+    }
+
+    if (!searcher.VerifyPasswordKey()) {
+        std::cerr << "错误: 主密码验证失败 (keyVerifier 不匹配)。" << std::endl;
+        return 1;
+    }
+    std::cout << "主密码校验通过，密钥已就绪。" << std::endl;
+
+    RunInteractiveLoop(searcher, cipherDir);
+    std::cout << "\n冷启动检索已退出。" << std::endl;
+    return 0;
 }
 
 bool ResolveCorpusDir(int argc, char* argv[], std::string& outDir) {
@@ -85,6 +203,10 @@ int main(int argc, char* argv[]) {
 #endif
 
     std::cout << "--- 国密加密搜索系统测试驱动 ---" << std::endl;
+
+    if (argc > 1 && std::string(argv[1]) == "--search-only") {
+        return RunColdStartSearch(argc, argv);
+    }
 
     std::string testDir;
     if (!ResolveCorpusDir(argc, argv, testDir)) {
@@ -265,35 +387,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 7. 交互式搜索模式
-    std::cout << "\n=============================================" << std::endl;
-    std::cout << "          交互式布尔搜索模式 (Interactive)      " << std::endl;
-    std::cout << "=============================================" << std::endl;
-    std::cout << "提示：输入如 'SM3 AND SM4' 或 'C++ OR 分词' 进行查询" << std::endl;
-    std::cout << "输入 'exit' 退出程序" << std::endl;
-
-    std::string userQuery;
-    std::cin.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
-
-    while (true) {
-        std::cout << "\n搜索请求 > ";
-        if (!std::getline(std::cin, userQuery) || userQuery == "exit") {
-            break;
-        }
-        if (userQuery.empty()) {
-            continue;
-        }
-
-        auto results = searcher.BooleanSearch(userQuery);
-        if (results.empty()) {
-            std::cout << "  [!] 未找到匹配内容: " << userQuery << std::endl;
-        } else {
-            std::cout << "  [*] 检索到 " << results.size() << " 个结果:" << std::endl;
-            for (const auto& [path, score] : results) {
-                std::cout << "    -> " << path << " (得分: " << score << ")" << std::endl;
-            }
-        }
-    }
+    // 7. 交互式搜索模式（含按路径密文解密命令）
+    RunInteractiveLoop(searcher, cipherDir);
 
     std::cout << "\n所有测试已完成。" << std::endl;
     return 0;

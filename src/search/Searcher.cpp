@@ -32,6 +32,7 @@ bool Searcher::LoadFileMap(const std::string& mapPath) {
     }
 
     m_fileMap.clear();
+    m_pathToId.clear();
 
     uint32_t docId;
     uint32_t pathLen;
@@ -42,6 +43,7 @@ bool Searcher::LoadFileMap(const std::string& mapPath) {
         if (!in.read(&path[0], pathLen)) return false;
         
         m_fileMap[docId] = path;
+        m_pathToId[path] = docId;
     }
 
     std::cout << "已成功加载文件映射，共包含 " << m_fileMap.size() << " 条记录。" << std::endl;
@@ -106,6 +108,15 @@ bool Searcher::VerifyPasswordKey() const {
     std::array<uint8_t, 16> expected{};
     std::memcpy(expected.data(), m_indexHeader.keyVerifier, expected.size());
     return CryptoEngine::VerifyKeyVerifier(expected);
+}
+
+bool Searcher::GetDocId(const std::string& path, uint32_t& outDocId) const {
+    auto it = m_pathToId.find(path);
+    if (it == m_pathToId.end()) {
+        return false;
+    }
+    outDocId = it->second;
+    return true;
 }
 
 /**

@@ -63,6 +63,11 @@ public:
     bool VerifyPasswordKey() const;
 
     /**
+     * @brief 根据原始文件路径查询对应的文档 ID（用于定位密文归档文件）
+     */
+    bool GetDocId(const std::string& path, uint32_t& outDocId) const;
+
+    /**
      * @brief 执行关键词搜索
      * @param keyword 待查关键词
      * @return 按 TF-IDF 降序排列的 (路径, 得分) 列表
@@ -78,6 +83,7 @@ public:
 
 private:
     std::map<uint32_t, std::string> m_fileMap;        ///< ID -> 路径 映射
+    std::map<std::string, uint32_t> m_pathToId;       ///< 路径 -> ID 反向映射
     std::ifstream m_indexFileStream;                  ///< 索引文件流
     IndexHeader m_indexHeader;                        ///< 索引头缓存
     std::vector<DictionaryEntry> m_dictionary;        ///< 内存词典

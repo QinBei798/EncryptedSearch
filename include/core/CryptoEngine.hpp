@@ -20,19 +20,50 @@
 class CryptoEngine {
 public:
     /**
-     * @brief 计算关键词的 SM3 哈希值
+     * @brief 计算关键词的 SM3 哈希值（无密钥摘要）
      * @param keyword 待计算的关键词字符串
      * @return 32字节的哈希值
      */
     static std::array<uint8_t, 32> ComputeSM3(const std::string& keyword);
 
     /**
-     * @brief 使用 PBKDF2 算法从密码派生密钥
+     * @brief 计算指定密钥与数据的 HMAC-SM3 值
+     * @param key 密钥缓冲区
+     * @param keyLen 密钥字节长度
+     * @param data 输入数据
+     * @return 32字节 HMAC-SM3 摘要
+     */
+    static std::array<uint8_t, 32> ComputeSM3HMAC(const uint8_t* key, size_t keyLen, const std::string& data);
+
+    /**
+     * @brief 计算关键词的带密钥盲索引陷门 (HMAC-SM3)
+     * @param keyword 待计算陷门的关键词
+     * @return 32字节陷门值；若未派生密钥将抛出 std::runtime_error
+     */
+    static std::array<uint8_t, 32> ComputeKeywordTrapdoor(const std::string& keyword);
+
+    /**
+     * @brief 使用 PBKDF2-SM3-HMAC 从主密码派生独立的加密密钥、索引陷门密钥及密码校验指纹
      * @param password 用户输入的原始密码
      * @param salt 盐值
      * @param iterations 迭代次数
      */
     static void DeriveKeySM3PBKDF2(const std::string& password, const std::array<uint8_t, 16>& salt, uint32_t iterations);
+
+    /**
+     * @brief 获取当前派生密钥对应的 16 字节校验指纹（用于验证索引加载时的主密码正误）
+     */
+    static std::array<uint8_t, 16> GetKeyVerifier();
+
+    /**
+     * @brief 以常量时间比较验证当前派生密钥是否与预期校验指纹一致
+     */
+    static bool VerifyKeyVerifier(const std::array<uint8_t, 16>& expectedVerifier);
+
+    /**
+     * @brief 清除内存中缓存的派生密钥
+     */
+    static void ResetKey();
 
     /**
      * @brief 检查系统是否已成功派生出密钥

@@ -73,11 +73,12 @@ const uint8_t S[256] = {
 	ROL32((X), 13) ^			\
 	ROL32((X), 23))
 
-#define S32(A)					\
-	((S[((A) >> 24)       ] << 24) |	\
-	 (S[((A) >> 16) & 0xff] << 16) |	\
-	 (S[((A) >>  8) & 0xff] <<  8) |	\
-	 (S[((A))       & 0xff]))
+/* 显式强转为 uint32_t，避免 uint8_t 整型提升为有符号 int 后左移 24 位触发 UBSan 符号位溢出未定义行为 */
+#define S32(A)						\
+	(((uint32_t)S[((A) >> 24)       ] << 24) |	\
+	 ((uint32_t)S[((A) >> 16) & 0xff] << 16) |	\
+	 ((uint32_t)S[((A) >>  8) & 0xff] <<  8) |	\
+	 ((uint32_t)S[((A))       & 0xff]))
 
 
 void sm4_set_encrypt_key(SM4_KEY *key, const uint8_t user_key[16])

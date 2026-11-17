@@ -16,40 +16,68 @@ namespace fs = std::filesystem;
 
 IndexManager::IndexManager(size_t threads) : m_hasher(threads) {}
 
-void IndexManager::ScanDirectory(const std::string& targetPath) {
+ScanStats IndexManager::ScanDirectory(const std::string& targetPath) {
     std::cout << "正在扫描目录: " << targetPath << "..." << std::endl;
-    
-    size_t fileCount = 0;
+
+    std::error_code ec;
+    if (!fs::exists(targetPath, ec) || !fs::is_directory(targetPath, ec)) {
+        std::cerr << "扫描跳过: 目标目录不存在或不可访问: " << targetPath << std::endl;
+        std::cout << "已提交 0 个文件任务（目录无效）。" << std::endl;
+        return m_stats;
+    }
+
+    const uint32_t firstId = m_nextFileId;
+    size_t batchFiles = 0;
+
     try {
         for (const auto& entry : fs::recursive_directory_iterator(targetPath)) {
-            if (entry.is_regular_file()) {
-                std::string path = entry.path().string();
-                
-                // 1. 建立文件路径与文档 ID 的双向映射
-                uint32_t docId = m_nextFileId++;
-                m_fileMap[docId] = path;
-                m_pathToId[path] = docId;
-                
-                // 2. 提交异步处理任务
-                // ParallelHasher 将在后台线程处理文件读取、分词及哈希计算
-                m_hasher.AddTask(path, docId);
-
-                // 3. 将原文件同步加密并保存至密文存储区
-                if (!m_cipherDir.empty()) {
-                    std::string cipherPath = m_cipherDir + "/" + std::to_string(docId) + ".cipher";
-                    if (!CryptoEngine::EncryptFileSM4(path, cipherPath)) {
-                        std::cerr << "警告: 文件加密失败: " << path << std::endl;
-                    }
-                }
-
-                fileCount++;
+            std::error_code entryEc;
+            if (!entry.is_regular_file(entryEc) || entryEc) {
+                continue;
             }
+
+            std::string path = entry.path().string();
+            uint64_t fileSize = entry.file_size(entryEc);
+            if (!entryEc) {
+                m_stats.totalBytes += fileSize;
+            }
+
+            // 1. 建立文件路径与文档 ID 的双向映射
+            uint32_t docId = m_nextFileId++;
+            m_fileMap[docId] = path;
+            m_pathToId[path] = docId;
+
+            // 2. 提交异步处理任务
+            // ParallelHasher 将在后台线程处理文件读取、分词及哈希计算
+            m_hasher.AddTask(path, docId);
+
+            // 3. 将原文件同步加密并保存至密文存储区
+            if (!m_cipherDir.empty()) {
+                std::string cipherPath = m_cipherDir + "/" + std::to_string(docId) + ".cipher";
+                if (!CryptoEngine::EncryptFileSM4(path, cipherPath)) {
+                    m_stats.encryptFailedCount++;
+                    std::cerr << "警告: 文件加密失败: " << path << std::endl;
+                }
+            }
+
+            batchFiles++;
+            m_stats.fileCount++;
         }
     } catch (const std::exception& e) {
         std::cerr << "扫描异常: " << e.what() << std::endl;
     }
 
-    std::cout << "已提交 " << fileCount << " 个文件任务。分配 ID 范围: 0 至 " << (m_nextFileId - 1) << std::endl;
+    if (batchFiles == 0) {
+        std::cout << "已提交 0 个文件任务（未发现常规文件）。" << std::endl;
+    } else {
+        std::cout << "已提交 " << batchFiles << " 个文件任务。分配 ID 范围: "
+                  << firstId << " 至 " << (m_nextFileId - 1) << std::endl;
+    }
+    return m_stats;
+}
+
+const ScanStats& IndexManager::GetStats() const {
+    return m_stats;
 }
 
 void IndexManager::SaveToIndex(const std::string& indexPath) {
@@ -62,12 +90,16 @@ void IndexManager::SaveToIndex(const std::string& indexPath) {
         return;
     }
 
-    // 2. 构造并写入文件头
+    // 2. 构造并写入文件头 (v3: 含盐值、迭代次数与密码校验指纹)
     IndexHeader header;
     header.keywordCount = hashResults.size();
     header.docCount = m_fileMap.size();
     std::copy(m_salt.begin(), m_salt.end(), header.salt);
     header.iterations = m_iterations;
+    if (CryptoEngine::HasKey()) {
+        const auto verifier = CryptoEngine::GetKeyVerifier();
+        std::copy(verifier.begin(), verifier.end(), header.keyVerifier);
+    }
     out.write(reinterpret_cast<const char*>(&header), sizeof(IndexHeader));
 
     // 3. 计算起始偏移量（跳过文件头和固定长度的词典区）

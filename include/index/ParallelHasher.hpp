@@ -48,6 +48,14 @@ public:
      */
     std::map<std::array<uint8_t, 32>, std::vector<Posting>> GetResults();
 
+    /**
+     * @brief 计算分块缓冲区末尾的安全切分位置（优先词/分隔符边界，兜底 UTF-8 字符边界）
+     * @param data 缓冲区起始地址
+     * @param size 缓冲区字节长度
+     * @return 可安全送入分词器的字节前缀长度（<= size）
+     */
+    static size_t FindSafeSplitPoint(const char* data, size_t size);
+
 private:
     /**
      * @brief 工作线程核心函数

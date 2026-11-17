@@ -16,6 +16,16 @@
 #include <cstdint>
 
 /**
+ * @struct ScanStats
+ * @brief 目录扫描与加密归档统计信息
+ */
+struct ScanStats {
+    size_t   fileCount          = 0; ///< 扫描到的常规文件总数
+    uint64_t totalBytes         = 0; ///< 扫描文件的真实总字节数
+    size_t   encryptFailedCount = 0; ///< 密文归档失败的文件数
+};
+
+/**
  * @class IndexManager
  * @brief 负责索引的构建流程，包括文件扫描、ID 映射及数据保存
  */
@@ -30,8 +40,14 @@ public:
     /**
      * @brief 扫描指定目录，并启动异步哈希计算任务
      * @param targetPath 目标文档目录
+     * @return 累计扫描统计信息
      */
-    void ScanDirectory(const std::string& targetPath);
+    ScanStats ScanDirectory(const std::string& targetPath);
+
+    /**
+     * @brief 获取当前累计的目录扫描统计信息
+     */
+    const ScanStats& GetStats() const;
 
     /**
      * @brief 等待所有任务完成，并将倒排索引写入二进制文件
@@ -69,6 +85,7 @@ private:
 
     std::array<uint8_t, 16> m_salt = {0};         ///< 记录的盐值
     uint32_t m_iterations = 0;                    ///< 记录的迭代次数
+    ScanStats m_stats;                            ///< 目录扫描统计信息
 };
 
 #endif // ENCRYPTEDSEARCH_INDEXER_HPP

@@ -117,7 +117,7 @@ void AccumulateTokens(
         if (word.empty() || word.find_first_not_of(" \t\n\r\v\f") == std::string::npos) {
             continue;
         }
-        localTermCounts[CryptoEngine::ComputeSM3(word)]++;
+        localTermCounts[CryptoEngine::ComputeKeywordTrapdoor(word)]++;
         totalValidWords++;
     }
     chunkWords.clear();
@@ -231,26 +231,31 @@ void ParallelHasher::worker() {
         std::map<std::array<uint8_t, 32>, uint32_t> localTermCounts;
         size_t totalValidWords = 0;
 
-        while (true) {
-            file.read(rawBuf.data(), CHUNK_SIZE);
-            const size_t bytesRead = static_cast<size_t>(file.gcount());
-            if (bytesRead == 0) break;
+        try {
+            while (true) {
+                file.read(rawBuf.data(), CHUNK_SIZE);
+                const size_t bytesRead = static_cast<size_t>(file.gcount());
+                if (bytesRead == 0) break;
 
-            leftover.append(rawBuf.data(), bytesRead);
-            std::string chunk = std::move(leftover);
-            leftover.clear();
+                leftover.append(rawBuf.data(), bytesRead);
+                std::string chunk = std::move(leftover);
+                leftover.clear();
 
-            const size_t splitPos = FindSafeSplitPoint(chunk.data(), chunk.size());
-            if (splitPos < chunk.size()) {
-                leftover.assign(chunk.begin() + static_cast<std::ptrdiff_t>(splitPos), chunk.end());
-                chunk.resize(splitPos);
+                const size_t splitPos = FindSafeSplitPoint(chunk.data(), chunk.size());
+                if (splitPos < chunk.size()) {
+                    leftover.assign(chunk.begin() + static_cast<std::ptrdiff_t>(splitPos), chunk.end());
+                    chunk.resize(splitPos);
+                }
+
+                TokenizeAndAccumulateChunk(chunk, chunkWords, localTermCounts, totalValidWords);
             }
 
-            TokenizeAndAccumulateChunk(chunk, chunkWords, localTermCounts, totalValidWords);
-        }
-
-        if (!leftover.empty()) {
-            TokenizeAndAccumulateChunk(leftover, chunkWords, localTermCounts, totalValidWords);
+            if (!leftover.empty()) {
+                TokenizeAndAccumulateChunk(leftover, chunkWords, localTermCounts, totalValidWords);
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[Worker] 索引计算失败 (" << filePath << "): " << e.what() << std::endl;
+            continue;
         }
 
         // 汇总本文件词频 (TF) 至全局倒排索引

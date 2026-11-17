@@ -17,20 +17,24 @@
  * ──────────────────────────────────────────────────────────
  */
 
+static constexpr uint32_t ESIX_MAGIC   = 0x58495345; ///< 魔数 ASCII "ESIX"
+static constexpr uint32_t ESIX_VERSION = 3;          ///< v3: HMAC-SM3 密钥盲索引 + 密码校验指纹
+
 #pragma pack(push, 1)
 
 /**
  * @struct IndexHeader
- * @brief 索引文件头结构 (48 bytes)
+ * @brief 索引文件头结构 (64 bytes)
  */
 struct IndexHeader {
-    uint32_t magic      = 0x58495345; ///< 魔数，ASCII "ESIX"
-    uint32_t version    = 2;          ///< 版本号
-    uint64_t keywordCount = 0;        ///< 索引中的关键词总数
-    uint64_t docCount   = 0;          ///< 文档总数
-    uint8_t  salt[16]   = {0};        ///< PBKDF2 盐值
-    uint32_t iterations = 0;          ///< PBKDF2 迭代次数
-    uint8_t  reserved[4] = {0};       ///< 预留字段
+    uint32_t magic           = ESIX_MAGIC;   ///< 魔数，ASCII "ESIX"
+    uint32_t version         = ESIX_VERSION; ///< 版本号
+    uint64_t keywordCount    = 0;            ///< 索引中的关键词总数
+    uint64_t docCount        = 0;            ///< 文档总数
+    uint8_t  salt[16]        = {0};          ///< PBKDF2 盐值
+    uint32_t iterations      = 0;            ///< PBKDF2 迭代次数
+    uint8_t  keyVerifier[16] = {0};          ///< 主密码校验指纹 (HMAC-SM3 截断)
+    uint8_t  reserved[4]     = {0};          ///< 预留字段
 };
 
 /**

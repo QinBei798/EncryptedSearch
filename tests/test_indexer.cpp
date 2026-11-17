@@ -104,6 +104,10 @@ void TestNestedFilesAndExactByteCount() {
 
     const uint64_t expectedBytes = fileA.size() + fileB.size() + fileC.size();
 
+    std::array<uint8_t, 16> salt{};
+    salt.fill(0x13);
+    CryptoEngine::DeriveKeySM3PBKDF2("nested_test_pass", salt, 1000);
+
     IndexManager manager(2);
     ScanStats stats = manager.ScanDirectory(docsDir.string());
     EXPECT_EQ(stats.fileCount, size_t(3), "nested scan should count 3 files");
@@ -124,8 +128,9 @@ void TestEncryptFailureAndSuccessTracking() {
     WriteBytesFile(docsDir / "doc1.txt", "SM3 and SM4 encrypted search test.");
     WriteBytesFile(docsDir / "doc2.txt", "Parallel indexing with C++17.");
 
-    // 1. 测试密文输出路径不可写时失败计数准确
+    // 1. 测试未派生密钥且密文输出路径不可写时失败计数准确
     {
+        CryptoEngine::ResetKey();
         IndexManager failMgr(2);
         failMgr.SetCipherDir(badCipherDir.string());
         ScanStats failStats = failMgr.ScanDirectory(docsDir.string());

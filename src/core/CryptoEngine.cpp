@@ -19,15 +19,28 @@ extern "C" {
     #include <gmssl/sm4.h>
 }
 
-// 全局静态状态，用于管理派生后的 SM4 密钥
+#include <algorithm>
+#include <cstring>
+#include <stdexcept>
+
+// 全局静态状态，用于管理派生后的隔离密钥及密码校验指纹
 static uint8_t g_sm4_key[16] = {0};
+static uint8_t g_index_key[32] = {0};
+static uint8_t g_key_verifier[16] = {0};
 static bool g_has_key = false;
+
+static void SecureZero(void* ptr, size_t len) {
+    volatile uint8_t* p = static_cast<volatile uint8_t*>(ptr);
+    while (len--) {
+        *p++ = 0;
+    }
+}
 
 std::array<uint8_t, 32> CryptoEngine::ComputeSM3(const std::string& keyword) {
     std::array<uint8_t, 32> digest;
     SM3_CTX ctx;
     sm3_init(&ctx);
-    sm3_update(&ctx, (const uint8_t*)keyword.c_str(), keyword.length());
+    sm3_update(&ctx, reinterpret_cast<const uint8_t*>(keyword.data()), keyword.length());
     sm3_finish(&ctx, digest.data());
     return digest;
 }
@@ -36,12 +49,79 @@ bool CryptoEngine::HasKey() {
     return g_has_key;
 }
 
+std::array<uint8_t, 32> CryptoEngine::ComputeSM3HMAC(const uint8_t* key, size_t keyLen, const std::string& data) {
+    if (!key && keyLen > 0) {
+        throw std::invalid_argument("HMAC key buffer is null");
+    }
+    std::array<uint8_t, 32> mac{};
+    SM3_HMAC_CTX ctx;
+    sm3_hmac_init(&ctx, key, keyLen);
+    if (!data.empty()) {
+        sm3_hmac_update(&ctx, reinterpret_cast<const uint8_t*>(data.data()), data.size());
+    }
+    sm3_hmac_finish(&ctx, mac.data());
+    SecureZero(&ctx, sizeof(ctx));
+    return mac;
+}
+
+std::array<uint8_t, 32> CryptoEngine::ComputeKeywordTrapdoor(const std::string& keyword) {
+    if (!g_has_key) {
+        throw std::runtime_error("Blind index key has not been derived");
+    }
+    return ComputeSM3HMAC(g_index_key, sizeof(g_index_key), keyword);
+}
+
+std::array<uint8_t, 16> CryptoEngine::GetKeyVerifier() {
+    if (!g_has_key) {
+        throw std::runtime_error("Key verifier requested before key derivation");
+    }
+    std::array<uint8_t, 16> verifier{};
+    std::memcpy(verifier.data(), g_key_verifier, verifier.size());
+    return verifier;
+}
+
+bool CryptoEngine::VerifyKeyVerifier(const std::array<uint8_t, 16>& expectedVerifier) {
+    if (!g_has_key) {
+        return false;
+    }
+    uint8_t diff = 0;
+    for (size_t i = 0; i < expectedVerifier.size(); ++i) {
+        diff |= static_cast<uint8_t>(g_key_verifier[i] ^ expectedVerifier[i]);
+    }
+    return diff == 0;
+}
+
+void CryptoEngine::ResetKey() {
+    SecureZero(g_sm4_key, sizeof(g_sm4_key));
+    SecureZero(g_index_key, sizeof(g_index_key));
+    SecureZero(g_key_verifier, sizeof(g_key_verifier));
+    g_has_key = false;
+}
+
 void CryptoEngine::DeriveKeySM3PBKDF2(const std::string& password, const std::array<uint8_t, 16>& salt, uint32_t iterations) {
-    // 使用 SM3-HMAC 作为伪随机函数的 PBKDF2 密钥派生
-    if (sm3_pbkdf2(password.c_str(), password.length(), salt.data(), salt.size(), iterations, sizeof(g_sm4_key), g_sm4_key) != 1) {
+    // 1. 使用 SM3-HMAC PBKDF2 派生 32 字节主密钥材料
+    std::array<uint8_t, 32> masterKey{};
+    if (sm3_pbkdf2(password.c_str(), password.length(),
+                   salt.data(), salt.size(), iterations,
+                   masterKey.size(), masterKey.data()) != 1) {
+        SecureZero(masterKey.data(), masterKey.size());
         throw std::runtime_error("PBKDF2 key derivation failed");
     }
+
+    // 2. 通过域分离标签扩展为独立用途子密钥（文件加密密钥 / 索引陷门密钥 / 密码校验指纹）
+    auto encSubKey = ComputeSM3HMAC(masterKey.data(), masterKey.size(), "EncryptedSearch:sm4-file-enc:v3");
+    auto idxSubKey = ComputeSM3HMAC(masterKey.data(), masterKey.size(), "EncryptedSearch:sm3-blind-index:v3");
+    auto verSubKey = ComputeSM3HMAC(masterKey.data(), masterKey.size(), "EncryptedSearch:key-verifier:v3");
+
+    std::memcpy(g_sm4_key, encSubKey.data(), sizeof(g_sm4_key));
+    std::memcpy(g_index_key, idxSubKey.data(), sizeof(g_index_key));
+    std::memcpy(g_key_verifier, verSubKey.data(), sizeof(g_key_verifier));
     g_has_key = true;
+
+    SecureZero(masterKey.data(), masterKey.size());
+    SecureZero(encSubKey.data(), encSubKey.size());
+    SecureZero(idxSubKey.data(), idxSubKey.size());
+    SecureZero(verSubKey.data(), verSubKey.size());
 }
 
 bool CryptoEngine::EncryptFileSM4(const std::string& inputFilePath, const std::string& outputFilePath) {

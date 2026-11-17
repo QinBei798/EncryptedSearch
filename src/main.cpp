@@ -211,6 +211,10 @@ int main(int argc, char* argv[]) {
         std::cerr << "加载索引数据失败，程序退出。" << std::endl;
         return 1;
     }
+    if (!searcher.VerifyPasswordKey()) {
+        std::cerr << "错误: 主密码校验指纹不匹配，拒绝执行检索。" << std::endl;
+        return 1;
+    }
 
     // 5. 自动化功能测试
     std::cout << "\n--- 执行功能测试案例 ---" << std::endl;

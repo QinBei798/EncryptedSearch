@@ -112,9 +112,9 @@ void TestMultiChunkRecallAndNoOverwriteBug() {
     hasher.AddTask(docPath.string(), 7);
     auto index = hasher.GetResults();
 
-    auto hashAlpha = CryptoEngine::ComputeSM3("alphachunkone");
-    auto hashBeta  = CryptoEngine::ComputeSM3("betachunktwo");
-    auto hashGamma = CryptoEngine::ComputeSM3("gammachunkthree");
+    auto hashAlpha = CryptoEngine::ComputeKeywordTrapdoor("alphachunkone");
+    auto hashBeta  = CryptoEngine::ComputeKeywordTrapdoor("betachunktwo");
+    auto hashGamma = CryptoEngine::ComputeKeywordTrapdoor("gammachunkthree");
 
     EXPECT_TRUE(index.find(hashAlpha) != index.end(), "Chunk 1 token must not be overwritten");
     EXPECT_TRUE(index.find(hashBeta) != index.end(), "Chunk 2 token must not be overwritten");
@@ -150,7 +150,7 @@ void TestCrossBoundaryWordsAt64KB() {
         hasher.AddTask(pathA.string(), 0);
         auto index = hasher.GetResults();
 
-        EXPECT_TRUE(index.find(CryptoEngine::ComputeSM3("encryptedsearch")) != index.end(),
+        EXPECT_TRUE(index.find(CryptoEngine::ComputeKeywordTrapdoor("encryptedsearch")) != index.end(),
                     "English word crossing 64KB boundary must remain intact");
     }
 
@@ -175,7 +175,7 @@ void TestCrossBoundaryWordsAt64KB() {
         hasher.AddTask(pathB.string(), 1);
         auto index = hasher.GetResults();
 
-        EXPECT_TRUE(index.find(CryptoEngine::ComputeSM3("搜索引擎")) != index.end(),
+        EXPECT_TRUE(index.find(CryptoEngine::ComputeKeywordTrapdoor("搜索引擎")) != index.end(),
                     "Chinese word crossing 64KB boundary must remain intact");
     }
 }
@@ -213,7 +213,7 @@ void TestLargeFileStreamingMemoryBound() {
         ParallelHasher hasher(1);
         hasher.AddTask(bigPath.string(), 1);
         auto index = hasher.GetResults();
-        EXPECT_TRUE(index.find(CryptoEngine::ComputeSM3("国密")) != index.end(),
+        EXPECT_TRUE(index.find(CryptoEngine::ComputeKeywordTrapdoor("国密")) != index.end(),
                     "24MB streaming file should index '国密'");
     }
 
@@ -230,6 +230,10 @@ void TestLargeFileStreamingMemoryBound() {
 } // namespace
 
 int main() {
+    std::array<uint8_t, 16> salt{};
+    salt.fill(0x42);
+    CryptoEngine::DeriveKeySM3PBKDF2("parallel_hasher_test_key", salt, 1000);
+
     TestFindSafeSplitPoint();
     TestMultiChunkRecallAndNoOverwriteBug();
     TestCrossBoundaryWordsAt64KB();

@@ -53,6 +53,16 @@ public:
     bool LoadIndex(const std::string& indexPath);
 
     /**
+     * @brief 获取已加载索引的头部元数据（含 salt、iterations、keyVerifier 等）
+     */
+    const IndexHeader& GetIndexHeader() const;
+
+    /**
+     * @brief 校验当前派生密钥是否与索引文件头中的密码校验指纹一致
+     */
+    bool VerifyPasswordKey() const;
+
+    /**
      * @brief 执行关键词搜索
      * @param keyword 待查关键词
      * @return 按 TF-IDF 降序排列的 (路径, 得分) 列表

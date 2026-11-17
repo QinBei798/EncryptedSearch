@@ -49,26 +49,63 @@ bool Searcher::LoadFileMap(const std::string& mapPath) {
 }
 
 bool Searcher::LoadIndex(const std::string& indexPath) {
+    if (m_indexFileStream.is_open()) {
+        m_indexFileStream.close();
+    }
+    m_dictionary.clear();
+    m_indexHeader = IndexHeader{};
+
     m_indexFileStream.open(indexPath, std::ios::binary);
     if (!m_indexFileStream) {
         std::cerr << "错误: 无法打开索引文件: " << indexPath << std::endl;
         return false;
     }
 
-    // 1. 读取文件头并验证
+    // 1. 读取文件头并校验魔数与版本号
     m_indexFileStream.read(reinterpret_cast<char*>(&m_indexHeader), sizeof(IndexHeader));
-    if (m_indexFileStream.gcount() != sizeof(IndexHeader) || m_indexHeader.magic != 0x58495345) {
-        std::cerr << "错误: 索引文件头无效或版本不匹配。" << std::endl;
+    if (m_indexFileStream.gcount() != sizeof(IndexHeader) || m_indexHeader.magic != ESIX_MAGIC) {
+        std::cerr << "错误: 索引文件头无效。" << std::endl;
+        m_indexFileStream.close();
+        return false;
+    }
+    if (m_indexHeader.version != ESIX_VERSION) {
+        std::cerr << "错误: 索引版本不兼容 (当前支持 v" << ESIX_VERSION
+                  << " HMAC-SM3 密钥盲索引，文件版本: v" << m_indexHeader.version
+                  << ")，请重新构建索引。" << std::endl;
         m_indexFileStream.close();
         return false;
     }
 
     // 2. 加载词典区（用于后续二分查找）
     m_dictionary.resize(m_indexHeader.keywordCount);
-    m_indexFileStream.read(reinterpret_cast<char*>(m_dictionary.data()), m_indexHeader.keywordCount * sizeof(DictionaryEntry));
-    
-    std::cout << "已加载索引: " << m_indexHeader.keywordCount << " 个关键词, " << m_indexHeader.docCount << " 个文档。" << std::endl;
+    if (m_indexHeader.keywordCount > 0) {
+        m_indexFileStream.read(reinterpret_cast<char*>(m_dictionary.data()),
+                               static_cast<std::streamsize>(m_indexHeader.keywordCount * sizeof(DictionaryEntry)));
+        if (!m_indexFileStream) {
+            std::cerr << "错误: 读取索引词典区失败。" << std::endl;
+            m_dictionary.clear();
+            m_indexFileStream.close();
+            return false;
+        }
+    }
+
+    std::cout << "已加载索引 (v" << m_indexHeader.version << "): "
+              << m_indexHeader.keywordCount << " 个关键词, "
+              << m_indexHeader.docCount << " 个文档。" << std::endl;
     return true;
+}
+
+const IndexHeader& Searcher::GetIndexHeader() const {
+    return m_indexHeader;
+}
+
+bool Searcher::VerifyPasswordKey() const {
+    if (!CryptoEngine::HasKey()) {
+        return false;
+    }
+    std::array<uint8_t, 16> expected{};
+    std::memcpy(expected.data(), m_indexHeader.keyVerifier, expected.size());
+    return CryptoEngine::VerifyKeyVerifier(expected);
 }
 
 /**
@@ -95,39 +132,19 @@ std::vector<DictionaryEntry>::const_iterator Searcher::binarySearchDictionary(co
 std::vector<std::pair<std::string, float>> Searcher::Search(const std::string& keyword) {
     std::vector<std::pair<std::string, float>> results;
 
-    if (!m_indexFileStream.is_open() || m_fileMap.empty()) return results;
+    if (!m_indexFileStream.is_open() || m_fileMap.empty() || !CryptoEngine::HasKey()) {
+        return results;
+    }
 
-    // 1. 关键词转小写并计算哈希
-    std::string lowerKeyword = keyword;
-    for (char& c : lowerKeyword) if (c >= 'A' && c <= 'Z') c += 32;
-    std::array<uint8_t, 32> keywordHash = CryptoEngine::ComputeSM3(lowerKeyword);
-
-    // 2. 词典检索
-    auto it = binarySearchDictionary(keywordHash);
-    if (it == m_dictionary.end()) return results;
-
-    // 3. 读取倒排列表
-    m_indexFileStream.clear();
-    m_indexFileStream.seekg(it->offset, std::ios::beg);
-
-    uint32_t docIdCount;
-    m_indexFileStream.read(reinterpret_cast<char*>(&docIdCount), sizeof(uint32_t));
-
-    std::vector<Posting> postings(docIdCount);
-    m_indexFileStream.read(reinterpret_cast<char*>(postings.data()), docIdCount * sizeof(Posting));
-
-    // 4. 计算 TF-IDF 权重
-    // IDF 计算采用平滑策略: log(N / (df + 1)) + 1
-    float idf = std::log(static_cast<float>(m_indexHeader.docCount) / static_cast<float>(docIdCount + 1)) + 1.0f;
-
-    for (const auto& p : postings) {
-        auto mapIt = m_fileMap.find(p.docId);
+    auto scoredPostings = GetPostingList(keyword);
+    for (const auto& [docId, score] : scoredPostings) {
+        auto mapIt = m_fileMap.find(docId);
         if (mapIt != m_fileMap.end()) {
-            results.push_back({mapIt->second, p.tf * idf});
+            results.push_back({mapIt->second, score});
         }
     }
 
-    // 5. 按相关性得分降序排列
+    // 按相关性得分降序排列
     std::sort(results.begin(), results.end(), [](const auto& a, const auto& b) {
         return a.second > b.second;
     });
@@ -139,26 +156,38 @@ std::vector<std::pair<std::string, float>> Searcher::Search(const std::string& k
 
 Searcher::ScoredPostings Searcher::GetPostingList(const std::string& keyword) {
     ScoredPostings result;
-    if (!m_indexFileStream.is_open()) return result;
+    if (!m_indexFileStream.is_open() || !CryptoEngine::HasKey()) {
+        return result;
+    }
 
+    // 1. 关键词转小写并计算带密钥盲索引陷门 (HMAC-SM3)
     std::string lowerKeyword = keyword;
     for (char& c : lowerKeyword) if (c >= 'A' && c <= 'Z') c += 32;
-    std::array<uint8_t, 32> keywordHash = CryptoEngine::ComputeSM3(lowerKeyword);
+    std::array<uint8_t, 32> keywordTrapdoor = CryptoEngine::ComputeKeywordTrapdoor(lowerKeyword);
 
-    auto it = binarySearchDictionary(keywordHash);
+    // 2. 词典二分检索
+    auto it = binarySearchDictionary(keywordTrapdoor);
     if (it == m_dictionary.end()) return result;
 
+    // 3. 按偏移量读取倒排列表
     m_indexFileStream.clear();
     m_indexFileStream.seekg(static_cast<std::streamoff>(it->offset), std::ios::beg);
 
     uint32_t docIdCount = 0;
     m_indexFileStream.read(reinterpret_cast<char*>(&docIdCount), sizeof(uint32_t));
+    if (!m_indexFileStream || docIdCount == 0) return result;
 
     std::vector<Posting> postings(docIdCount);
-    m_indexFileStream.read(reinterpret_cast<char*>(postings.data()), docIdCount * sizeof(Posting));
+    m_indexFileStream.read(reinterpret_cast<char*>(postings.data()),
+                           static_cast<std::streamsize>(docIdCount * sizeof(Posting)));
+    if (!m_indexFileStream) return result;
 
+    // 4. 计算平滑 TF-IDF 权重: log(N / (df + 1)) + 1
     float idf = std::log(static_cast<float>(m_indexHeader.docCount) / static_cast<float>(docIdCount + 1)) + 1.0f;
-    for (const auto& p : postings) result.push_back({p.docId, p.tf * idf});
+    result.reserve(postings.size());
+    for (const auto& p : postings) {
+        result.push_back({p.docId, p.tf * idf});
+    }
 
     return result;
 }

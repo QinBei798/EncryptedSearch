@@ -90,12 +90,16 @@ void IndexManager::SaveToIndex(const std::string& indexPath) {
         return;
     }
 
-    // 2. 构造并写入文件头
+    // 2. 构造并写入文件头 (v3: 含盐值、迭代次数与密码校验指纹)
     IndexHeader header;
     header.keywordCount = hashResults.size();
     header.docCount = m_fileMap.size();
     std::copy(m_salt.begin(), m_salt.end(), header.salt);
     header.iterations = m_iterations;
+    if (CryptoEngine::HasKey()) {
+        const auto verifier = CryptoEngine::GetKeyVerifier();
+        std::copy(verifier.begin(), verifier.end(), header.keyVerifier);
+    }
     out.write(reinterpret_cast<const char*>(&header), sizeof(IndexHeader));
 
     // 3. 计算起始偏移量（跳过文件头和固定长度的词典区）
